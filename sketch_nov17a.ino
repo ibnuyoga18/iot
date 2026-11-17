@@ -26,7 +26,9 @@ bool objectDetected = false;
 bool isDark = false;
 bool ledStatus = false;
 
-// ================ HTML DASHBOARD ===================
+bool wifiConnected = false;
+
+// ================ HTML DASHBOARD ====================
 const char webpage[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -36,15 +38,17 @@ const char webpage[] PROGMEM = R"rawliteral(
 
 <style>
 body {
-  font-family: Arial;
+  font-family: Arial, sans-serif;
   background: #eef2f7;
   text-align: center;
   padding: 20px;
 }
+
 .container {
   max-width: 500px;
   margin: auto;
 }
+
 .card {
   background: white;
   padding: 20px;
@@ -52,19 +56,40 @@ body {
   border-radius: 12px;
   box-shadow: 0 2px 8px #ccc;
 }
+
 .value {
   font-size: 26px;
   font-weight: bold;
   color: #2563eb;
 }
+
+.status {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.online {
+  color: green;
+}
+
+.offline {
+  color: red;
+}
 </style>
 </head>
 
 <body>
+
 <div class="container">
 
 <h2>Smart Room Monitoring</h2>
 <p>ESP32 IoT Dashboard</p>
+
+<div class="card">
+<h3>Status WiFi</h3>
+<p class="status" id="wifi">Loading...</p>
+<p id="ip">IP Address: -</p>
+</div>
 
 <div class="card">
 <h3>Jarak Objek</h3>
@@ -99,8 +124,19 @@ async function updateData() {
     const response = await fetch('/data');
     const data = await response.json();
 
+    document.getElementById('wifi').innerText =
+      data.wifi ? 'TERHUBUNG' : 'TERPUTUS';
+
+    document.getElementById('wifi').className =
+      data.wifi ? 'status online' : 'status offline';
+
+    document.getElementById('ip').innerText =
+      'IP Address: ' + data.ip;
+
     document.getElementById('distance').innerText =
-      data.distance < 0 ? 'Tidak terbaca' : data.distance + ' cm';
+      data.distance < 0
+      ? 'Tidak terbaca'
+      : data.distance + ' cm';
 
     document.getElementById('light').innerText =
       data.light;
@@ -115,6 +151,11 @@ async function updateData() {
       data.led ? 'MENYALA' : 'MATI';
 
   } catch (error) {
+    document.getElementById('wifi').innerText =
+      'SERVER TIDAK TERJANGKAU';
+    document.getElementById('wifi').className =
+      'status offline';
+
     console.log('Gagal mengambil data');
   }
 }
@@ -129,6 +170,7 @@ updateData();
 
 // ================ ULTRASONIC READING ================
 float readDistance() {
+
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
 
@@ -136,8 +178,8 @@ float readDistance() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  // Timeout 30 ms
-  unsigned long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  unsigned long duration =
+    pulseIn(ECHO_PIN, HIGH, 30000);
 
   if (duration == 0) {
     return -1;
@@ -150,24 +192,49 @@ float readDistance() {
 
 // ================ SENSOR PROCESSING =================
 void readSensors() {
+
   distance = readDistance();
   ldrValue = analogRead(LDR_PIN);
 
+  // Deteksi objek maksimal 100 cm
   objectDetected =
     (distance > 0 && distance <= DISTANCE_THRESHOLD);
 
-  // Asumsi nilai ADC lebih rendah saat gelap
+  // Nilai ADC tinggi berarti gelap
   isDark = (ldrValue >= LIGHT_THRESHOLD);
 
-  // LED menyala jika ada objek dan kondisi gelap
+  // LED ON jika objek dekat dan kondisi gelap
   ledStatus = objectDetected && isDark;
 
   digitalWrite(LED_PIN, ledStatus ? HIGH : LOW);
 }
 
+// ================ WIFI STATUS =======================
+String getWiFiStatus() {
+
+  if (WiFi.status() == WL_CONNECTED) {
+    return "Terhubung";
+  }
+
+  return "Terputus";
+}
+
 // ================ SERIAL MONITOR ====================
 void printData() {
+
+  Serial.println();
   Serial.println("===== SMART ROOM MONITORING =====");
+
+  Serial.print("Status WiFi: ");
+  Serial.println(getWiFiStatus());
+
+  Serial.print("IP Address: ");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("Tidak tersedia");
+  }
 
   Serial.print("Jarak Objek: ");
 
@@ -195,31 +262,73 @@ void printData() {
 
 // ================ WEB SERVER ========================
 void handleRoot() {
+
   server.send_P(200, "text/html", webpage);
 }
 
 void handleData() {
+
+  bool wifiStatus = (WiFi.status() == WL_CONNECTED);
+
+  String ipAddress = wifiStatus
+    ? WiFi.localIP().toString()
+    : "-";
+
   String json = "{";
 
   json += "\"distance\":" + String(distance, 1) + ",";
   json += "\"light\":" + String(ldrValue) + ",";
   json += "\"object\":" + String(objectDetected ? "true" : "false") + ",";
   json += "\"dark\":" + String(isDark ? "true" : "false") + ",";
-  json += "\"led\":" + String(ledStatus ? "true" : "false");
+  json += "\"led\":" + String(ledStatus ? "true" : "false") + ",";
+  json += "\"wifi\":" + String(wifiStatus ? "true" : "false") + ",";
+  json += "\"ip\":\"" + ipAddress + "\"";
 
   json += "}";
 
   server.send(200, "application/json", json);
 }
 
+// ================ WIFI CONNECTION ===================
+void connectWiFi() {
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  Serial.print("Menghubungkan ke WiFi");
+
+  unsigned long startAttempt = millis();
+
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - startAttempt < 20000) {
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.println("WiFi Connected!");
+
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+
+  } else {
+
+    Serial.println("WiFi Connection Failed!");
+  }
+}
+
 // ================ SETUP =============================
 void setup() {
+
   Serial.begin(115200);
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(LED_PIN, OUTPUT);
-
   pinMode(LDR_PIN, INPUT);
 
   digitalWrite(TRIG_PIN, LOW);
@@ -228,23 +337,10 @@ void setup() {
   Serial.println();
   Serial.println("Starting Smart Room Monitoring...");
 
-  // Connect to WiFi
-  WiFi.begin(ssid, password);
+  // Connect WiFi
+  connectWiFi();
 
-  Serial.print("Connecting to WiFi");
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.println("WiFi Connected!");
-
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-
-  // Configure web server
+  // Configure Web Server
   server.on("/", handleRoot);
   server.on("/data", handleData);
 
@@ -255,20 +351,39 @@ void setup() {
 
 // ================ MAIN LOOP =========================
 void loop() {
+
   server.handleClient();
 
   static unsigned long lastSensorRead = 0;
   static unsigned long lastPrint = 0;
+  static unsigned long lastWiFiCheck = 0;
 
-  // Read sensors every 100 ms
+  // Sensor reading every 100 ms
   if (millis() - lastSensorRead >= 100) {
+
     lastSensorRead = millis();
+
     readSensors();
   }
 
-  // Print sensor data every 1 second
+  // Print data every 1 second
   if (millis() - lastPrint >= 1000) {
+
     lastPrint = millis();
+
     printData();
+  }
+
+  // Check WiFi every 5 seconds
+  if (millis() - lastWiFiCheck >= 5000) {
+
+    lastWiFiCheck = millis();
+
+    if (WiFi.status() != WL_CONNECTED) {
+
+      Serial.println("WiFi terputus! Mencoba menghubungkan kembali...");
+
+      WiFi.reconnect();
+    }
   }
 }
