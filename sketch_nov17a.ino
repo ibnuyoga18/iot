@@ -154,10 +154,10 @@ void readSensors() {
   ldrValue = analogRead(LDR_PIN);
 
   objectDetected =
-    (distance > 0 && distance >= DISTANCE_THRESHOLD);
+    (distance > 0 && distance <= DISTANCE_THRESHOLD);
 
   // Asumsi nilai ADC lebih rendah saat gelap
-  isDark = (ldrValue <= LIGHT_THRESHOLD);
+  isDark = (ldrValue >= LIGHT_THRESHOLD);
 
   // LED menyala jika ada objek dan kondisi gelap
   ledStatus = objectDetected && isDark;
